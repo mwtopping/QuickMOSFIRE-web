@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+
+
+</head>
+
+<body>
+<center>
+<h1> Matplotlib Test </h1>
+<form method="POST" action="" multiple=True enctype="multipart/form-data">
+	{{ fileform.hidden_tag() }}
+	{{ fileform.fileinput.label }}
+	{{ fileform.fileinput() }}
+	<input type="submit">
+</form>
+
+<img class='center-fit' src='data:image/png;base64,{{ img }}' width=100%/>
+</center>
+</body>
+</html>
