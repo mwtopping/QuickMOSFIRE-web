@@ -116,3 +116,4 @@ dmypy.json
 .idea/
 
 secret_key.txt
+testdata/
