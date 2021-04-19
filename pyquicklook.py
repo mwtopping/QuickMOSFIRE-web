@@ -1,10 +1,15 @@
 from astropy.io import fits
-from scipy import ndimage
+from scipy.optimize import curve_fit
 import matplotlib.pyplot as plt
 import numpy as np
 
+# the location of the mosfire data relative to the directory of the script
+# also the location the result of this script is saved in
+DATA_DIR = './'  # if they are in the same directory
 DATA_DIR = './testdata/'
 
+def linefunc(xarr, a, b, h, mu, sigma):
+    return a + b*xarr + h * np.exp(-((xarr-mu)/sigma/2)**2)
 
 def quicklook(ranges, utdate, pattern, offset, prime):
 
@@ -15,9 +20,45 @@ def quicklook(ranges, utdate, pattern, offset, prime):
     # load all of the images
     images = {}
     headers = {}
-    for imgno in np.arange(ranges[0], ranges[1]+1, 1):
-        images['{}_{:04d}'.format(utdate, imgno)] = preprocess(utdate, imgno)
+    frames = []
+    backgrounds = []
+    sigmas = []
+    areas = []
+    centers = []
+    colors = []
+    colorarr = ['#e41a1c','#377eb8','#4daf4a','#e78ac3']
+    for ii, imgno in enumerate(np.arange(ranges[0], ranges[1]+1, 1)):
+        print('Processing m{}_{:04d}.fits'.format(utdate, imgno))
+        processed_image, (bkgd, sigma, area, center) = preprocess(utdate, imgno)
+        images['{}_{:04d}'.format(utdate, imgno)] = processed_image
         headers['{}_{:04d}'.format(utdate, imgno)] = fits.getheader(DATA_DIR + 'm{}_{:04d}.fits'.format(utdate, imgno))
+        if area > 0:
+            frames.append(imgno)
+            backgrounds.append(bkgd)
+            sigmas.append(sigma)
+            areas.append(area)
+            centers.append(center)
+            colors.append(colorarr[ii%4])
+        else:
+            print("Cannot fit star for frame number {}".format(imgno))
+
+    # plot all of the observing summaries
+    summaryfig, summaryaxs = plt.subplots(2, 2, figsize=(12, 10))
+    summaryaxs[0,0].scatter(frames, centers, c=colors, s=96, edgecolors='black', linewidths=0.5)
+    summaryaxs[0,0].set_xlabel('Frame Number')
+    summaryaxs[0,0].set_ylabel('Star position (y pixel)')
+
+    summaryaxs[0,1].scatter(frames, sigmas, c=colors, s=96, edgecolors='black', linewidths=0.5)
+    summaryaxs[0, 1].set_xlabel('Frame Number')
+    summaryaxs[0, 1].set_ylabel('Star FWHM [arcsec]')
+
+    summaryaxs[1,0].scatter(frames, areas, c=colors, s=96, edgecolors='black', linewidths=0.5)
+    summaryaxs[1, 0].set_xlabel('Frame Number')
+    summaryaxs[1, 0].set_ylabel('Star Flux [arbitrary]')
+
+    summaryaxs[1,1].scatter(frames, backgrounds, c=colors, s=96, edgecolors='black', linewidths=0.5)
+    summaryaxs[1, 1].set_xlabel('Frame Number')
+    summaryaxs[1, 1].set_ylabel('Background level')
 
     # start with set number zero
     setno = 0
@@ -25,12 +66,11 @@ def quicklook(ranges, utdate, pattern, offset, prime):
     nsets = int((ranges[1] - ranges[0] + 1)/4)
 
     # create a blank total image
-    imgdata = preprocess(utdate, ranges[0])
-    s = np.shape(imgdata)[1]
-    print("This is happening here")
+    s = np.shape(processed_image)[1]
 
     totalimg = np.zeros((2048 - pix_prime - pix_offset, s, nsets))
 
+    print("Creating Stack")
     # loop through each dither set
     for dither_set in range(nsets):
 
@@ -45,9 +85,6 @@ def quicklook(ranges, utdate, pattern, offset, prime):
         for ii, i_img in enumerate(np.arange(set_start, set_end+1, 1)):
             # print out the file currently being read
             #  and then read in the data
-            print('Processing m{}_{:04d}.fits'.format(utdate, i_img))
-#            imgdata = fits.getdata(DATA_DIR+'m{}_{:04d}.fits'.format(utdate, i_img))
-#            imgdata = preprocess(utdate, i_img)
             imgdata = images['{}_{:04d}'.format(utdate, i_img)]
             #imgheader = fits.getheader(DATA_DIR+'m{}_{:04d}.fits'.format(utdate, i_img))
 
@@ -68,7 +105,6 @@ def quicklook(ranges, utdate, pattern, offset, prime):
 
             # subtract the sky image
             tmp_im = imgdata - (sky1+sky2)/2.
-            print("showing sky image")
 
             # depending on where we are in the dither pattern,
             #  set the sky-subtracted image to either A or B
@@ -86,65 +122,10 @@ def quicklook(ranges, utdate, pattern, offset, prime):
 
 #    print(imgheader.keys)
     summedimage = np.median(totalimg, axis=2)
-
-    fig, ax = plt.subplots(figsize=(12, 12))
-    plt.imshow(summedimage, origin='lower', vmin=-30, vmax=30)
-    print(summedimage)
-    plt.show()
-#    Nbars = 92
-#    barnums = range(92)
-#    barxpos = []
-#    barypos = []
-#    for ii, b in enumerate(barnums):
-#        barypos.append((45-int(ii/2))*7.982/.18)
-#        print((45-int(ii/2))*7.982/.18)
-#        barxpos.append((367.2-imgheader['B{:02d}POS'.format(b+1)])/0.18)
-#
-#    # find the pixel of the left and right extremes of the bars
-#    minxpix = np.min(barxpos)
-#    maxxpix = np.max(barxpos)
-#
-#    # create a new image that can hold the shifted data
-#    newimg = np.zeros((2048, 2048+np.int(maxxpix)-np.int(minxpix)))
-#    new_width = np.shape(newimg)[1]
-#
-#    fig, ax = plt.subplots(figsize=(12, 12))
-#    plt.imshow(summedimage, vmin=-30, vmax=30)
-#
-#    lastx = -10
-#    # loop through all of the bars
-#    for ii, (x, y) in enumerate(zip(barxpos, barypos)):
-#        # only look at the right bars
-#        if ii%2 and (not ii==0):
-#            continue
-#        print(x, lastx)
-#        if np.abs(x-lastx) > 1/.18:
-#            # this is a new bar
-#            ax.axhline(y=int(y), color='black')
-#        else:
-#            ax.axhline(y=int(y), color='black', linestyle=':', linewidth=.8)
-#        # get the sub image of this bar
-#        # they are roughly
-#        subimg = summedimage[int(y-pix_offset+pix_prime):int(y-pix_offset+pix_prime)+44+ii%2,:]
-#        #subimg = summedimage[int(y-10):int(y-10)+44+ii%2,:]
-#
-#        sub_height = np.shape(subimg)[0]
-#        sub_width = np.shape(subimg)[1]
-#
-#        dx = int(maxxpix)-int(x)
-#
-#
-#        subimg = np.pad(subimg[::-1, :], ((2048-int(y)-sub_height, int(y)), (dx,new_width-sub_width-dx) ))
-#        newimg += subimg
-#        lastx = x
-#
-#    # save the total image
-#    hdu = fits.PrimaryHDU(np.median(totalimg, axis=2))
-#    hdu.writeto(DATA_DIR+'quick-m{}_{}-{}.fits'.format(utdate, ranges[0], ranges[1]), overwrite=True)
     hdu = fits.PrimaryHDU(summedimage)
     hdu.writeto(DATA_DIR+'quick-m{}_{}-{}_shifted.fits'.format(utdate, ranges[0], ranges[1]), overwrite=True)
-#
-#    plt.show()
+    plt.savefig(DATA_DIR+'quick-m{}_{}-{}_summary.png'.format(utdate, ranges[0], ranges[1]), dpi=200)
+    print("Completed")
 
 # determine if the image number is even or not
 def even(x):
@@ -154,6 +135,30 @@ def even(x):
 def preprocess(utdate, i_img):
     imgdata = fits.getdata(DATA_DIR + 'm{}_{:04d}.fits'.format(utdate, i_img))
     imgheader = fits.getheader(DATA_DIR + 'm{}_{:04d}.fits'.format(utdate, i_img))
+
+    # attempt to measure the star parameters
+    try:
+        # sum the image
+        slice = np.median(imgdata, axis=1)
+        slicesize=20
+        slicemin = slice.argmax()-slicesize
+        slicemax = slicemin + 2*slicesize
+
+        # fit the line
+        popt, pcov = curve_fit(linefunc, range(2*slicesize), slice[slicemin:slicemax],
+                               p0=[1, 0, np.max(slice), slicesize, 3])
+
+
+        height = popt[2]
+        sigma = popt[4]
+        center = popt[3]
+        background = popt[0]
+        area = height * sigma * np.sqrt(2*3.14)
+    except:
+        sigma = -1
+        center = -1
+        background = -1
+        area = -1
 
     Nbars = 92
     barnums = range(92)
@@ -180,11 +185,7 @@ def preprocess(utdate, i_img):
     newbarxpos.append(x)
     newbarypos.append(0)
 
-    print(np.array(newbarxpos).astype(int))
 
-#    for y in newbarypos:
-#        print(y)
-#        ax.axhline(y=y, color='white', linewidth=2)
     # find the pixel of the left and right extremes of the bars
     minxpix = np.min(barxpos)
     maxxpix = np.max(barxpos)
@@ -200,8 +201,6 @@ def preprocess(utdate, i_img):
     # loop through all of the bars
     for ii in range(len(newbarxpos)-1):
 
-#        print(int(newbarypos[ii]),int(newbarypos[ii+1]))
-
         subimg = imgdata[int(newbarypos[ii]):int(newbarypos[ii+1]),:]
 
         sub_height = np.shape(subimg)[0]
@@ -210,20 +209,11 @@ def preprocess(utdate, i_img):
         dx = int(maxxpix)-int(newbarxpos[ii+1])
 
 
-#        if ii == 0:
-#            subimg = np.pad(subimg[::-1, :], ((2048-sub_height, 0),
-#                                          (dx,new_width-sub_width-dx)))
-#        else:
         subimg = np.pad(subimg[::-1, :], ((2048-int(newbarypos[ii])-sub_height, int(newbarypos[ii])),
                                           (dx,new_width-sub_width-dx)))
         newimg += subimg
 
-#    fig, ax = plt.subplots(figsize=(12, 12))
-#    plt.imshow(newimg[::-1,:], origin='lower', vmin=20, vmax=100)
-#    plt.show()
-
-    return newimg[::-1,:]
+    return newimg[::-1,:], (background, 2.355*.18*sigma, area, slicemin+center)
 
 if __name__=="__main__":
     quicklook([236, 259], 210403, 'abab', 2.7, 0.3)
-#    preprocess(210403, 256)
