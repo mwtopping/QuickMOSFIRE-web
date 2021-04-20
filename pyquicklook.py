@@ -7,11 +7,13 @@ import numpy as np
 # also the location the result of this script is saved in
 DATA_DIR = './'  # if they are in the same directory
 DATA_DIR = './testdata/'
+DATA_DIR = './mosfire_apr18-2021/'
 
 def linefunc(xarr, a, b, h, mu, sigma):
     return a + b*xarr + h * np.exp(-((xarr-mu)/sigma/2)**2)
 
-def quicklook(ranges, utdate, pattern, offset, prime):
+def quicklook(imgfilename, utdate, pattern, offset, prime):
+    filenames = np.genfromtxt(imgfilename, dtype=str)
 
     # these are the dither parameters converted into pixels
     pix_prime = int(prime/0.18)
@@ -27,28 +29,47 @@ def quicklook(ranges, utdate, pattern, offset, prime):
     centers = []
     colors = []
     colorarr = ['#e41a1c','#377eb8','#4daf4a','#e78ac3']
-    for ii, imgno in enumerate(np.arange(ranges[0], ranges[1]+1, 1)):
-        print('Processing m{}_{:04d}.fits'.format(utdate, imgno))
-        processed_image, (bkgd, sigma, area, center) = preprocess(utdate, imgno)
-        images['{}_{:04d}'.format(utdate, imgno)] = processed_image
-        headers['{}_{:04d}'.format(utdate, imgno)] = fits.getheader(DATA_DIR + 'm{}_{:04d}.fits'.format(utdate, imgno))
+    initial_star_position = 0
+    for ii, filename in enumerate(filenames):
+        print('Processing {}'.format(filename))
+        processed_image, (bkgd, sigma, area, center) = preprocess(filename)
+        key = filename[:-5]
+        frameno = int(filename[8:-5])
+        images[key] = processed_image
+        headers[key] = fits.getheader(DATA_DIR + filename)
+        if ii == 0:
+            initial_star_position = center
+        if ii%4==0:
+            dither_offset = 0
+        if ii%4==1:
+            dither_offset = offset/0.18
+        if ii%4==2:
+            dither_offset = prime/0.18
+        if ii%4==3:
+            dither_offset = (prime+offset)/0.18
         if area > 0:
-            frames.append(imgno)
+            frames.append(frameno)
             backgrounds.append(bkgd)
             sigmas.append(sigma)
             areas.append(area)
-            centers.append(center)
+            centers.append(center-dither_offset)
             colors.append(colorarr[ii%4])
         else:
-            print("Cannot fit star for frame number {}".format(imgno))
+            print("Cannot fit star for frame number {}".format(filename))
+
 
     # plot all of the observing summaries
     summaryfig, summaryaxs = plt.subplots(2, 2, figsize=(12, 10))
-    summaryaxs[0,0].scatter(frames, centers, c=colors, s=96, edgecolors='black', linewidths=0.5)
+    summaryaxs[0,0].scatter(frames, (np.array(centers) - centers[0])*.18, c=colors, s=96, edgecolors='black', linewidths=0.5)
+#    summaryaxs[0,0]
     summaryaxs[0,0].set_xlabel('Frame Number')
-    summaryaxs[0,0].set_ylabel('Star position (y pixel)')
+    summaryaxs[0,0].set_ylabel('Star drift [arcsec]')
+    summaryaxs[0,0].text(0.05, 0.9, "A", transform=summaryaxs[0,0].transAxes, horizontalalignment='left', color=colorarr[0], fontsize=16, weight='bold')
+    summaryaxs[0,0].text(0.05, 0.84, "B", transform=summaryaxs[0,0].transAxes, horizontalalignment='left', color=colorarr[1], fontsize=16, weight='bold')
+    summaryaxs[0,0].text(0.05, 0.78, "A'", transform=summaryaxs[0,0].transAxes, horizontalalignment='left', color=colorarr[2], fontsize=16, weight='bold')
+    summaryaxs[0,0].text(0.05, 0.72, "B'", transform=summaryaxs[0,0].transAxes, horizontalalignment='left', color=colorarr[3], fontsize=16, weight='bold')
 
-    summaryaxs[0,1].scatter(frames, sigmas, c=colors, s=96, edgecolors='black', linewidths=0.5)
+    summaryaxs[0, 1].scatter(frames, sigmas, c=colors, s=96, edgecolors='black', linewidths=0.5)
     summaryaxs[0, 1].set_xlabel('Frame Number')
     summaryaxs[0, 1].set_ylabel('Star FWHM [arcsec]')
 
@@ -60,47 +81,35 @@ def quicklook(ranges, utdate, pattern, offset, prime):
     summaryaxs[1, 1].set_xlabel('Frame Number')
     summaryaxs[1, 1].set_ylabel('Background level')
 
-    # start with set number zero
-    setno = 0
-    # the total number of dither patterns is the number of frames/4
-    nsets = int((ranges[1] - ranges[0] + 1)/4)
-
     # create a blank total image
     s = np.shape(processed_image)[1]
 
-    totalimg = np.zeros((2048 - pix_prime - pix_offset, s, nsets))
+    totalimg = np.zeros((2048 - pix_prime - pix_offset, s, int(len(filenames)/4)))
 
     print("Creating Stack")
     # loop through each dither set
-    for dither_set in range(nsets):
+
+    for dither_set in range(int(len(filenames)/4)):
 
         A = np.zeros((2048 - pix_prime, s))
         B = np.zeros((2048 - pix_prime, s))
 
-        # define the image numbers at the beginning and end of the set
-        set_start = ranges[0]+setno*4
-        set_end = (ranges[0]+3)+setno*4
-
         # loop through each image in the set
-        for ii, i_img in enumerate(np.arange(set_start, set_end+1, 1)):
+        for ii in range(4):
+            key = filenames[dither_set*4+ii][:-5]
             # print out the file currently being read
             #  and then read in the data
-            imgdata = images['{}_{:04d}'.format(utdate, i_img)]
-            #imgheader = fits.getheader(DATA_DIR+'m{}_{:04d}.fits'.format(utdate, i_img))
+            imgdata = images[key]
 
             # define the sky frame based on which image we are reading in within
             #  the dither pattern
-            if i_img != set_start:
-                #sky1 = fits.getdata(DATA_DIR+'m{}_{:04d}.fits'.format(utdate, i_img-1))
-#                sky1 = preprocess(utdate, i_img-1)
-                sky1 = images['{}_{:04d}'.format(utdate, i_img-1)]
-            if i_img != set_end:
-                #sky2 = fits.getdata(DATA_DIR+'m{}_{:04d}.fits'.format(utdate, i_img+1))
-#                sky2 = preprocess(utdate, i_img+1)
-                sky2 = images['{}_{:04d}'.format(utdate, i_img + 1)]
-            if i_img == set_start:
+            if ii != 0:
+                sky1 = images[filenames[dither_set*4+ii-1][:-5]]
+            if ii != 3:
+                sky2 = images[filenames[dither_set*4+ii+1][:-5]]
+            if ii == 0:
                 sky1 = sky2
-            if i_img == set_end:
+            if ii == 3:
                 sky2 = sky1
 
             # subtract the sky image
@@ -108,23 +117,20 @@ def quicklook(ranges, utdate, pattern, offset, prime):
 
             # depending on where we are in the dither pattern,
             #  set the sky-subtracted image to either A or B
-            if even(i_img):
+            if even(dither_set*4+ii):
                 A += tmp_im[:2048-pix_prime, :]
             else:
                 B += tmp_im[:2048-pix_prime, :]
 
-    
-        # save the total image from this one particluar dither pattern    
-        totalimg[:,:,setno] = A[:2048-pix_prime-pix_offset, :]+B[pix_offset:2048-pix_prime, :]
 
-        # move onto the next set
-        setno += 1
+        # save the total image from this one particluar dither pattern
+        totalimg[:,:,dither_set] = A[:2048-pix_prime-pix_offset, :]+B[pix_offset:2048-pix_prime, :]
 
 #    print(imgheader.keys)
     summedimage = np.median(totalimg, axis=2)
     hdu = fits.PrimaryHDU(summedimage)
-    hdu.writeto(DATA_DIR+'quick-m{}_{}-{}_shifted.fits'.format(utdate, ranges[0], ranges[1]), overwrite=True)
-    plt.savefig(DATA_DIR+'quick-m{}_{}-{}_summary.png'.format(utdate, ranges[0], ranges[1]), dpi=200)
+    hdu.writeto(DATA_DIR+'quick-m{}_{:.1f}hrs_H_shifted.fits'.format(utdate, len(filenames)*120/3600), overwrite=True)
+    plt.savefig(DATA_DIR+'quick-m{}_{:.1f}hrs_H_summary.png'.format(utdate, len(filenames)*120/3600), dpi=200)
     print("Completed")
 
 # determine if the image number is even or not
@@ -132,9 +138,9 @@ def even(x):
     return x%2
 
 
-def preprocess(utdate, i_img):
-    imgdata = fits.getdata(DATA_DIR + 'm{}_{:04d}.fits'.format(utdate, i_img))
-    imgheader = fits.getheader(DATA_DIR + 'm{}_{:04d}.fits'.format(utdate, i_img))
+def preprocess(filename):
+    imgdata = fits.getdata(DATA_DIR + filename)
+    imgheader = fits.getheader(DATA_DIR + filename)
 
     # attempt to measure the star parameters
     try:
@@ -216,4 +222,4 @@ def preprocess(utdate, i_img):
     return newimg[::-1,:], (background, 2.355*.18*sigma, area, slicemin+center)
 
 if __name__=="__main__":
-    quicklook([236, 259], 210403, 'abab', 2.7, 0.3)
+    quicklook(DATA_DIR+'imlist.txt', 210409, 'abab', 2.7, 0.3)

@@ -117,3 +117,6 @@ dmypy.json
 
 secret_key.txt
 testdata/
+*.fits
+*.txt
+*.png
